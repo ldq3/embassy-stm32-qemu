@@ -198,9 +198,6 @@ pub use crate::pac::NVIC_PRIO_BITS;
 /// `embassy-stm32` global configuration.
 #[non_exhaustive]
 pub struct Config {
-    /// RCC config.
-    pub rcc: rcc::Config,
-
     /// Enable debug during sleep and stop.
     ///
     /// May increase power consumption. Defaults to true.
@@ -249,7 +246,6 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            rcc: Default::default(),
             #[cfg(dbgmcu)]
             enable_debug_during_sleep: true,
             #[cfg(any(stm32l4, stm32l5, stm32u5))]
@@ -308,14 +304,7 @@ pub fn init(config: Config) -> Peripherals {
             }
         });
 
-        #[cfg(not(any(stm32f1, stm32wb, stm32wl)))]
-        rcc::enable_and_reset_with_cs::<peripherals::SYSCFG>(cs);
-        #[cfg(not(any(stm32h5, stm32h7, stm32h7rs, stm32wb, stm32wl)))]
-        rcc::enable_and_reset_with_cs::<peripherals::PWR>(cs);
-        #[cfg(not(any(stm32f2, stm32f4, stm32f7, stm32l0, stm32h5, stm32h7, stm32h7rs)))]
-        rcc::enable_and_reset_with_cs::<peripherals::FLASH>(cs);
-
-        // Enable the VDDIO2 power supply on chips that have it.
+          // Enable the VDDIO2 power supply on chips that have it.
         // Note that this requires the PWR peripheral to be enabled first.
         #[cfg(any(stm32l4, stm32l5))]
         {
@@ -343,53 +332,24 @@ pub fn init(config: Config) -> Peripherals {
             });
         }
 
-        unsafe {
-            #[cfg(ucpd)]
-            ucpd::init(
-                cs,
-                #[cfg(peri_ucpd1)]
-                config.enable_ucpd1_dead_battery,
-                #[cfg(peri_ucpd2)]
-                config.enable_ucpd2_dead_battery,
-            );
+        #[cfg(feature = "_split-pins-enabled")]
+        crate::pac::SYSCFG.pmcr().modify(|pmcr| {
+            #[cfg(feature = "split-pa0")]
+            pmcr.set_pa0so(true);
+            #[cfg(feature = "split-pa1")]
+            pmcr.set_pa1so(true);
+            #[cfg(feature = "split-pc2")]
+            pmcr.set_pc2so(true);
+            #[cfg(feature = "split-pc3")]
+            pmcr.set_pc3so(true);
+        });
 
-            #[cfg(feature = "_split-pins-enabled")]
-            crate::pac::SYSCFG.pmcr().modify(|pmcr| {
-                #[cfg(feature = "split-pa0")]
-                pmcr.set_pa0so(true);
-                #[cfg(feature = "split-pa1")]
-                pmcr.set_pa1so(true);
-                #[cfg(feature = "split-pc2")]
-                pmcr.set_pc2so(true);
-                #[cfg(feature = "split-pc3")]
-                pmcr.set_pc3so(true);
-            });
+        #[cfg(feature = "exti")]
+        exti::init(cs);
 
-            gpio::init(cs);
-            dma::init(
-                cs,
-                #[cfg(bdma)]
-                config.bdma_interrupt_priority,
-                #[cfg(dma)]
-                config.dma_interrupt_priority,
-                #[cfg(gpdma)]
-                config.gpdma_interrupt_priority,
-            );
-            #[cfg(feature = "exti")]
-            exti::init(cs);
-
-            rcc::init(config.rcc);
-
-            // must be after rcc init
-            #[cfg(feature = "_time-driver")]
-            time_driver::init(cs);
-
-            #[cfg(feature = "low-power")]
-            {
-                crate::rcc::REFCOUNT_STOP2 = 0;
-                crate::rcc::REFCOUNT_STOP1 = 0;
-            }
-        }
+        // must be after rcc init
+        #[cfg(feature = "_time-driver")]
+        time_driver::init();
 
         p
     })
