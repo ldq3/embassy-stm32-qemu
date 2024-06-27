@@ -12,9 +12,7 @@ use stm32_metapac::timer::{regs, TimGp16};
 
 use crate::interrupt::typelevel::Interrupt;
 use crate::pac::timer::vals;
-use crate::rcc::{self, SealedRccPeripheral};
-#[cfg(feature = "low-power")]
-use crate::rtc::Rtc;
+use crate::rcc::SealedRccPeripheral; // what is the use of this?
 use crate::timer::{CoreInstance, GeneralInstance1Channel};
 use crate::{interrupt, peripherals};
 
@@ -251,45 +249,31 @@ impl AlarmState {
     }
 }
 
-pub(crate) struct RtcDriver {
+// Timer driver without rtc.
+pub(crate) struct TimerDriver {
     /// Number of 2^15 periods elapsed since boot.
     period: AtomicU32,
     alarm_count: AtomicU8,
     /// Timestamp at which to fire alarm. u64::MAX if no alarm is scheduled.
     alarms: Mutex<CriticalSectionRawMutex, [AlarmState; ALARM_COUNT]>,
-    #[cfg(feature = "low-power")]
-    rtc: Mutex<CriticalSectionRawMutex, Cell<Option<&'static Rtc>>>,
 }
 
 #[allow(clippy::declare_interior_mutable_const)]
 const ALARM_STATE_NEW: AlarmState = AlarmState::new();
 
-embassy_time_driver::time_driver_impl!(static DRIVER: RtcDriver = RtcDriver {
+embassy_time_driver::time_driver_impl!(static DRIVER: TimerDriver = TimerDriver {
     period: AtomicU32::new(0),
     alarm_count: AtomicU8::new(0),
     alarms: Mutex::const_new(CriticalSectionRawMutex::new(), [ALARM_STATE_NEW; ALARM_COUNT]),
-    #[cfg(feature = "low-power")]
-    rtc: Mutex::const_new(CriticalSectionRawMutex::new(), Cell::new(None)),
 });
 
-impl RtcDriver {
-    fn init(&'static self, cs: critical_section::CriticalSection) {
+impl TimerDriver {
+    fn init(&'static self) {
         let r = regs_gp16();
-
-        rcc::enable_and_reset_with_cs::<T>(cs);
-
-        let timer_freq = T::frequency();
 
         r.cr1().modify(|w| w.set_cen(false));
         r.cnt().write(|w| w.set_cnt(0));
 
-        let psc = timer_freq.0 / TICK_HZ as u32 - 1;
-        let psc: u16 = match psc.try_into() {
-            Err(_) => panic!("psc division overflow: {}", psc),
-            Ok(n) => n,
-        };
-
-        r.psc().write_value(psc);
         r.arr().write(|w| w.set_arr(u16::MAX));
 
         // Set URS, generate update and clear URS
@@ -446,27 +430,6 @@ impl RtcDriver {
     }
 
     #[cfg(feature = "low-power")]
-    /// Stop the wakeup alarm, if enabled, and add the appropriate offset
-    fn stop_wakeup_alarm(&self, cs: CriticalSection) {
-        if let Some(offset) = self.rtc.borrow(cs).get().unwrap().stop_wakeup_alarm(cs) {
-            self.add_time(offset, cs);
-        }
-    }
-
-    /*
-        Low-power public functions: all create a critical section
-    */
-    #[cfg(feature = "low-power")]
-    /// Set the rtc but panic if it's already been set
-    pub(crate) fn set_rtc(&self, rtc: &'static Rtc) {
-        critical_section::with(|cs| {
-            rtc.stop_wakeup_alarm(cs);
-
-            assert!(self.rtc.borrow(cs).replace(Some(rtc)).is_none())
-        });
-    }
-
-    #[cfg(feature = "low-power")]
     /// The minimum pause time beyond which the executor will enter a low-power state.
     pub(crate) const MIN_STOP_PAUSE: embassy_time::Duration = embassy_time::Duration::from_millis(250);
 
@@ -485,12 +448,6 @@ impl RtcDriver {
             if time_until_next_alarm < Self::MIN_STOP_PAUSE {
                 Err(())
             } else {
-                self.rtc
-                    .borrow(cs)
-                    .get()
-                    .unwrap()
-                    .start_wakeup_alarm(time_until_next_alarm, cs);
-
                 regs_gp16().cr1().modify(|w| w.set_cen(false));
 
                 Ok(())
@@ -515,7 +472,7 @@ impl RtcDriver {
     }
 }
 
-impl Driver for RtcDriver {
+impl Driver for TimerDriver {
     fn now(&self) -> u64 {
         let r = regs_gp16();
 
@@ -594,10 +551,10 @@ impl Driver for RtcDriver {
 }
 
 #[cfg(feature = "low-power")]
-pub(crate) fn get_driver() -> &'static RtcDriver {
+pub(crate) fn get_driver() -> &'static TimerDriver {
     &DRIVER
 }
 
-pub(crate) fn init(cs: CriticalSection) {
-    DRIVER.init(cs)
+pub(crate) fn init() {
+    DRIVER.init()
 }
