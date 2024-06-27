@@ -1,0 +1,8 @@
+[target.'cfg(all(target_arch = "arm", target_os = "none"))']
+runner = "qemu-system-arm -cpu cortex-m3 -machine stm32vldiscovery -nographic -semihosting-config enable=on,target=native -kernel"
+
+[build]
+target = "thumbv7m-none-eabi"
+
+[env]
+DEFMT_LOG = "trace"
